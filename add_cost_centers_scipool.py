@@ -1,7 +1,3 @@
-import boto3
-import pandas as pd
-from botocore.exceptions import ClientError
-
 #
 # Given an AWS account, iterate through the EC2 instances and
 # S3 buckets. For each resource that has Project tag in the
@@ -9,12 +5,17 @@ from botocore.exceptions import ClientError
 # value drawn from the map
 #
 	
-# PROFILE_NAME = 'scipool-prod-sc-reader'
+import boto3
+import pandas as pd
+from botocore.exceptions import ClientError
+
 PROFILE_NAME = 'scipool-dev-sc-reader'
+#PROFILE_NAME = 'scipool-prod-sc-reader'
+
 
 
 PROJECT_TO_COST_CENTER_FILE = 'project_to_cost_center.tsv'
-DRY_RUN = False
+DRY_RUN = True
 
 def main():
 	# This specifies the account to process
