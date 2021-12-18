@@ -9,10 +9,10 @@ import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
 
-PROFILE_NAME = 'scicomp-tagger'
+PROFILE_NAME = 'sandbox-tagger'
 
 PROJECT_TO_COST_CENTER_FILE = 'project_to_cost_center.tsv'
-DRY_RUN = False
+DRY_RUN = True
 
 def main():
 	# This specifies the account to process
@@ -97,6 +97,9 @@ def main():
 			response = client.get_bucket_tagging(Bucket=bucket_name)
 		except ClientError as e:
 			msg = str(e)
+			if msg.find("AccessDenied"):
+				print(f"Cannot get Bucket Tagging for {bucket_name}")
+				continue
 			if msg.find("NoSuchTagSet")<0:
 				raise e
 			response = {'TagSet':[]}
@@ -125,12 +128,21 @@ def main():
 				continue
 			cc = pcc_dict[project]
 			print(f'{bucket_name}, owner: {owner_email}, project: {project}, cost center: {cc}')
-			tags.append({'Key':'CostCenter','Value':cc})
+			found_it=False
+			for tag in tags:
+				if tag['Key']=='CostCenter':
+					tag['Value']=cc
+					found_it=True
+					break
+			if not found_it:
+				tags.append({'Key':'CostCenter','Value':cc})
 			if not DRY_RUN:
 				client.put_bucket_tagging(
 	    				Bucket=bucket_name,
 	    				Tagging={'TagSet': tags},
 				)
+		else:
+			print(f'No project mapping for bucket: {bucket_name}, project {project}')
 		
 if __name__ == "__main__":
     main()

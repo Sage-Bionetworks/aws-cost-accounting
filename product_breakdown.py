@@ -3,7 +3,9 @@ from IPython.display import display
 
 # TODO CUR report will be read from AWS, not from a local file
 #CUR_FILE = '2021Sept_CUR.parquet'
-CUR_FILE = '2021Oct_CUR.parquet'
+#CUR_FILE = '2021Oct_CUR.parquet'
+#CUR_FILE = '2021Nov_CUR.parquet'
+CUR_FILE = '2021Dec18_PARTIAL_CUR.parquet'
 
 # These are the accounts that require special handling
 SCICOMP_ACCOUNT =       '055273631518'
@@ -21,6 +23,10 @@ PROJECT_COLUMN = 'resource_tags_user_project'
 PRODUCT_NAME_COLUMN = 'product_product_name'
 DISPLAY_VALUE_COLUMN = 'Cost'
 DISPLAY_PROJECT_COLUMN = 'Project'
+PRODUCT_CODE_COLUMN = "line_item_product_code"
+PRODUCT_USAGE_TYPE_COLUMN = "product_usagetype"
+PRODUCT_LINE_ITEM_TYPE_COLUMN = "line_item_line_item_type" # tax or non/tax
+CREATED_BY_COLUMN = "resource_tags_aws_created_by"
 USAGE_TYPE = 'line_item_usage_type'
 DESCRIPTION = 'line_item_line_item_description'
 
@@ -50,15 +56,20 @@ def main():
   		PROJECT_COLUMN,
   		PRODUCT_NAME_COLUMN,
   		USAGE_TYPE,
-  		DESCRIPTION
+  		DESCRIPTION,
+  		PRODUCT_USAGE_TYPE_COLUMN,
+  		PRODUCT_LINE_ITEM_TYPE_COLUMN,
+  		PRODUCT_CODE_COLUMN,
+  		CREATED_BY_COLUMN
 	]
 	df = pd.read_parquet(CUR_FILE, columns=columns)
 	
-	#acct_row_indices = [df.at[i,ACCOUNT_ID_COLUMN]==SYNAPSE_PROD_ACCOUNT for i in df.index]
-	#acct_rows = df[acct_row_indices]
+	#acct_rows = df.loc[df[ACCOUNT_ID_COLUMN].apply(lambda x: x in TOP_MIXED_ACCOUNT_IDS)]
+	acct_rows = df.loc[df.apply(
+		lambda x: x[ACCOUNT_ID_COLUMN] in [SANDBOX_ACCOUNT] 
+		and x[PRODUCT_CODE_COLUMN] in ['AmazonEC2']
+	, axis=1)]
 	
-	acct_rows = df.loc[df[ACCOUNT_ID_COLUMN].apply(lambda x: x in TOP_MIXED_ACCOUNT_IDS)]
-
 	# Compute total cost for the month
 	total_cost = acct_rows[VALUE_COLUMN].sum()
 		
@@ -67,13 +78,17 @@ def main():
 	joined = acct_rows.join(accounts.set_index(ACCOUNT_ID_COLUMN), on=ACCOUNT_ID_COLUMN, how="inner")
 	
 	# group expenses by their category.  See group_by() for details
-	gb = acct_rows.groupby((lambda row_index: break_down_sandbox_by_tag_and_product(joined,row_index)), dropna=False, group_keys=False)
+	gb = acct_rows.groupby((lambda row_index: group_by_ec2_usage(joined,row_index)), dropna=False, group_keys=False)
 	
-	# sum up each category
-	summarized = gb.sum().sort_values(VALUE_COLUMN)
+	if True:
+		# add up small rows to make table legible
+		sorted = merge_small_rows(gb.sum(), .99, "Other")
+	else:
+		# sum up each category
+		summarized = gb.sum().sort_values(VALUE_COLUMN)
 	
-	# sort, descending
-	sorted = summarized.sort_values(VALUE_COLUMN, ascending=False)[[VALUE_COLUMN]]
+		# sort, descending
+		sorted = summarized.sort_values(VALUE_COLUMN, ascending=False)[[VALUE_COLUMN]]
 	
 	# display the result
 	sorted = sorted.rename(columns={VALUE_COLUMN:DISPLAY_VALUE_COLUMN})
@@ -87,6 +102,50 @@ def main():
 	if (abs(total-total_cost)>0.01):
 		raise Exception("categorized costs to not add up to total bill.")
 	print(f"\nTotal: ${total:.2f}")
+	
+def merge_small_rows(df, threshold, etc_label):
+    '''
+    df is a data frame with numerical values in the rightmost row
+    threshold is a value in [0,1], the percentage of the total to
+    keep itemized. 
+    
+    Returns a copy of df having the rows with the largest values itemized,
+    such that their total is > threshold.   The remainder goes into a final 
+    row labeled with the value of the parameter 'etc_label' 
+    '''
+    nrow = df.shape[0]
+    ncol = df.shape[1]
+    col_label = df.columns[ncol-1]
+    total = sum(df[col_label])
+    result = df.sort_values(col_label, ascending=False)
+
+    partial_sum = 0
+    row_count = 0
+    for i in range(nrow):
+        if partial_sum > total * threshold:
+            break
+        partial_sum = partial_sum + result.iat[i,ncol-1]
+        row_count = row_count + 1
+    result = result.head(row_count)
+    if total>partial_sum+1e-5:
+        new_row = {col_label:(total-partial_sum)}
+        for i in range(ncol-1):
+            new_row[result.columns[i]]="-"
+        new_row = pd.Series(data=new_row, name=etc_label)
+        result = result.append(new_row, ignore_index=False)
+    return result
+
+def group_by_ec2_usage(df, row_index): 
+	usage_type = df.at[row_index, PRODUCT_USAGE_TYPE_COLUMN]
+	if usage_type is None or usage_type=="Usage":
+		usage_type = ""
+	is_tax = df.at[row_index, PRODUCT_LINE_ITEM_TYPE_COLUMN]
+	if is_tax is None:
+		is_tax = ""
+	created_by = df.at[row_index, CREATED_BY_COLUMN]
+	if created_by is None:
+		created_by = ""
+	return created_by+" "+usage_type+" "+is_tax
 	
 
 def group_by_product_type(df, row_index): 
